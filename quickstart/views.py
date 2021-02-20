@@ -1,70 +1,68 @@
-from django.contrib.auth.models import User, Group
-from django.http import JsonResponse, HttpResponse
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework import viewsets
+from django.contrib.auth.models import User
+from rest_framework import generics, renderers
 from rest_framework import permissions
-from rest_framework.parsers import JSONParser
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework.reverse import reverse
 
 from quickstart.models import Snippet
-from quickstart.serializers import UserSerializer, GroupSerializer, SnippetSerializer
+from quickstart.permissions import IsOwnerOrReadOnly
+from quickstart.serializers import UserSerializer, SnippetSerializer
 
 
-class UserViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows users to be viewed or edited.
-    """
+@api_view(['GET'])
+def api_root(request, format=None):
+    return Response({
+        'users': reverse(UserList.name, request=request, format=format),
+        'snippets': reverse(SnippetList.name, request=request, format=format),
+    })
+
+
+class SnippetHighlight(generics.GenericAPIView):
+    name = 'snippet-highlight'
+    queryset = Snippet.objects.all()
+    renderer_classes = [renderers.StaticHTMLRenderer]
+
+    def get(self, request, *args, **kwargs) -> Response:
+        snippet = self.get_object()
+        return Response(snippet.highlighted)
+
+
+class UserList(generics.ListAPIView):
+    name = 'user-list'
     queryset = User.objects.all().order_by('-date_joined')
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
 
-class GroupViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint that allows groups to be viewed or edited.
-    """
-    queryset = Group.objects.all()
-    serializer_class = GroupSerializer
-    permission_classes = [permissions.IsAuthenticated]
+class UserDetail(generics.RetrieveAPIView):
+    name = 'user-detail'
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
 
-@csrf_exempt
-def snippet_list(request):
+class SnippetList(generics.ListCreateAPIView):
     """
     List all code snippets, or create a new snippet.
     """
-    if request.method == 'GET':
-        snippets = Snippet.objects.all()
-        serializer = SnippetSerializer(snippets, many=True)
-        return JsonResponse(serializer.data, safe=False)
+    name = 'snippet-list'
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
-    elif request.method == 'POST':
-        data = JSONParser().parse(request)
-        serializer = SnippetSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return JsonResponse(serializer.data, status=201)
-        return JsonResponse(serializer.errors, status=400)
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
 
-@csrf_exempt
-def snippet_detail(request, pk):
+
+class SnippetDetail(generics.RetrieveUpdateDestroyAPIView):
     """
     Retrieve update or delete a code snippet
-    :param request:
-    :param pk:
-    :return:
     """
-    try:
-        snippet = Snippet.objects.get(pk=pk)
-    except Snippet.DoesNotExist:
-        return HttpResponse(status=404)
-
-    if request.method == 'GET':
-        serializer = SnippetSerializer(snippet)
-        return JsonResponse(serializer.data)
-
-    elif request.method == 'PUT':
-        data = JSONParser().parse(request)
-        serializer = SnippetSerializer(snippet, data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return JsonResponse(serializer.data)
+    name = 'snippet-detail'
+    queryset = Snippet.objects.all()
+    serializer_class = SnippetSerializer
+    permission_classes = [
+        permissions.IsAuthenticatedOrReadOnly,
+        IsOwnerOrReadOnly,
+    ]
